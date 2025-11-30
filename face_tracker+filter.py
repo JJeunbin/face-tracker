@@ -2,7 +2,7 @@ from time import time
 from ultralytics import YOLO
 import cv2
 import socket
-import inverse_kinematics as ik
+import functions as ik
 import numpy as np
 
 GREEN = (0, 255, 0)

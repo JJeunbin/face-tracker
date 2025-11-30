@@ -1,7 +1,7 @@
 from time import time, sleep    # 코드 지연 및 프레임 계산 / 시간 관련 기능들
 import cv2                      # opencv 패키지
 from ultralytics import YOLO    # YOLO 패키지
-import inverse_kinematics as ik
+import functions as ik
 
 GREEN = (0, 255, 0)
 RED = (0, 0, 255)
@@ -32,14 +32,14 @@ while True:
         break
     
     frame = cv2.flip(frame, 1)              # 영상 좌우반전
-    detection = model(frame)[0]             # 얼굴 감지 결과 받아오기
+    detection = model(frame, verbose=False)[0]             # 얼굴 감지 결과 받아오기
     
     for data in (detection.boxes.xyxy):     # 박스 데이터 리스트 변환
                                             # data : [xmin, ymin, xmax, ymax]
         # 박스 좌표 입력
         xmin, ymin, xmax, ymax = int(data[0]), int(data[1]), int(data[2]), int(data[3])
         xcenter, ycenter = (xmin+xmax)//2, (ymin+ymax)//2
-        print("face center position:", xcenter, ",", ycenter)
+        # print("face center position:", xcenter, ",", ycenter)
         
         # 박스 그리기, 중심점 찍기
         cv2.rectangle(frame, (xmin, ymin), (xmax, ymax), GREEN, 2)
@@ -52,12 +52,13 @@ while True:
         
         # 모터 회전각 계산
         #angle = ik.calc_angle(xcenter, ycenter)
+        print(xmax - xmin)
 
 
     end = time()            # 프레임 계산용 종료 시간 저장
     
     total = end - start                                                         # 총 처리 시간 (초단위)
-    print(f"Time to process 1 frame: {total:.2f} seconds")
+    # print(f"Time to process 1 frame: {total:.2f} seconds")
     fps = f"FPS: {1 / total:.2f}"                                               # 프레임 계산
     cv2.putText(frame, fps, (10, 20), cv2.FONT_HERSHEY_SIMPLEX, 0.5, RED, 2)    # 프레임 화면 출력
 
