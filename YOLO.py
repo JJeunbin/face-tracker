@@ -1,18 +1,19 @@
 from time import time, sleep    # 코드 지연 및 프레임 계산 / 시간 관련 기능들
 import cv2                      # opencv 패키지
 from ultralytics import YOLO    # YOLO 패키지
+import inverse_kinematics as ik
 
 GREEN = (0, 255, 0)
 RED = (0, 0, 255)
 
+
 # YOLO 모델 생성 / yolov8n-face pretrained ver
 model = YOLO("yolov8n-face.pt")
 
-
 # videoCapture 시작 / 카메라 연결
 cap = cv2.VideoCapture(0)
-# url = "http://10.221.52.72:8080/video"
-cap = cv2.VideoCapture(url)
+# url = "http://172.30.1.45:8080/video"
+# cap = cv2.VideoCapture(url)
 
 # 카메라 연결 확인
 print(cap.isOpened())
@@ -23,14 +24,10 @@ cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
 
 
 while True:
-    # 프레임 계산용 시작 시간 저장
-    start = time()
+    start = time()              # 프레임 계산용 시작 시간 저장
     
-    # ret = true 영상 정상적으로 읽어옴 frame = 프레임 넘파이 행렬 데이터
-    ret, frame = cap.read()
-
-    # ret = false일 경우 에러 처리
-    if not ret:
+    ret, frame = cap.read()     # ret = true 영상 정상적으로 읽어옴 frame = 프레임 넘파이 행렬 데이터
+    if not ret:                 # ret = false일 경우 에러 처리
         print("Cam Error")
         break
     
@@ -46,21 +43,23 @@ while True:
         
         # 박스 그리기, 중심점 찍기
         cv2.rectangle(frame, (xmin, ymin), (xmax, ymax), GREEN, 2)
-        cv2.line(frame, (xcenter, ycenter), (xcenter, ycenter), GREEN, 5)
+        cv2.circle(frame, (xcenter, ycenter), 2, GREEN, 3)
+        cv2.putText(frame, f"({xcenter}, {ycenter})", (xcenter+10, ycenter+10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, GREEN, 2)
+
+        # 화면 중심점 찍기
+        cv2.circle(frame, (320, 240), 2, RED, 3)
+        cv2.putText(frame, f"({320}, {240})", (320+10, 240+10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, RED, 2)
         
+        # 모터 회전각 계산
+        #angle = ik.calc_angle(xcenter, ycenter)
 
-    # 프레임 계산용 종료 시간 저장
-    end = time()
 
-    # 총 처리 시간 (초단위)
-    total = end - start
+    end = time()            # 프레임 계산용 종료 시간 저장
+    
+    total = end - start                                                         # 총 처리 시간 (초단위)
     print(f"Time to process 1 frame: {total:.2f} seconds")
-
-    # 프레임 계산
-    fps = f"FPS: {1 / total:.2f}"
-
-    # 프레임 화면 출력
-    cv2.putText(frame, fps, (10, 20), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)    
+    fps = f"FPS: {1 / total:.2f}"                                               # 프레임 계산
+    cv2.putText(frame, fps, (10, 20), cv2.FONT_HERSHEY_SIMPLEX, 0.5, RED, 2)    # 프레임 화면 출력
 
     # 윈도우 창 띄우기
     cv2.namedWindow("vedio", cv2.WINDOW_NORMAL)
