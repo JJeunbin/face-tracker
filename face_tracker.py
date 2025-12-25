@@ -1,204 +1,171 @@
+import cv2
+import threading
 from time import time
 from ultralytics import YOLO
-import cv2
 import socket
-import os
-import csv
-import numpy as np
-import functions as fnc
-
 
 GREEN = (0, 255, 0)
 RED = (0, 0, 255)
 
-# ESP32
+GAIN_X = 0.011
+GAIN_Y = 0.01
+GAIN_Z = 0.05
+
+DEADZONE_X = 20
+DEADZONE_Y = 15
+DEADZONE_Z = 10
+
+# -----------------------------
+# UDP 설정
+# -----------------------------
 ESP32_IP = "192.168.4.1"
 ESP32_PORT = 5000
 sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 
-# YOLO 모델 생성 / yolov8n-face pretrained ver
+# -----------------------------
+# YOLO 모델 불러오기
+# -----------------------------
 model = YOLO("yolov8n-face.pt")
 
-# 카메라
-cap = cv2.VideoCapture(0)
-# url = "http://192.168.4.4:8080/video"
-# cap = cv2.VideoCapture(url)
-print(cap.isOpened())
-cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)      # 해상도 설정
-cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+# -----------------------------
+# 최신 프레임만 유지하는 클래스
+# -----------------------------
+class FrameGetter:
+    def __init__(self, url):
+        self.cap = cv2.VideoCapture(url)
+        self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)  # 버퍼 최소화
+        self.frame = None
+        self.stopped = False
+        self.lock = threading.Lock()
 
-# 로봇 링크 및 최대 각속도 제한
-L2, L3, H = 17, 16, 5
-MAX_ANGULAR_VELOCITY = 40.0
+    def start(self):
+        threading.Thread(target=self.update, daemon=True).start()
+        return self
 
-# 거리 모델 (box_len → distance(cm))
-def boxlen_to_distance(box_len):
-    return -0.194*box_len + 82.79
+    def update(self):
+        while not self.stopped:
+            try:
+                ret, frame = self.cap.read()
 
-# PID 초기값
-alpha = 0.45
-dt_prev = time()
-prev_del_x = prev_del_y = prev_del_z = 0
-prev_err_x = prev_err_y = prev_err_z = 0.0
+                # ret이 False거나 frame이 None이면 그냥 스킵
+                if not ret or frame is None:
+                    continue
 
-# PID 계수 (좌표 제어용)
-Kp_x, Kd_x = 0.05, 0.01
-Kp_y, Kd_y = 0.05, 0.01
-Kp_z, Kd_z = 0.05, 0.01
+                with self.lock:
+                    self.frame = frame
 
-# 초기 좌표
-Px = 15.0
-Py = 0.0
-Pz = 25.0
+            except Exception as e:
+                print("Frame read error:", e)
+                continue
 
-prev_th1 = prev_th2 = prev_th3 = prev_th4 = 90
+    def read(self):
+        with self.lock:
+            return self.frame.copy() if self.frame is not None else None
 
-# CSV 기록 준비
-log_file = "pid_log.csv"
-csv_fields = ["time","err_x","err_y","err_z","Px","Py","Pz","th1","th2","th3"]
-if os.path.exists(log_file):
-    os.remove(log_file)
-csvfile = open(log_file, 'w', newline='')
-csvwriter = csv.DictWriter(csvfile, fieldnames=csv_fields)
-csvwriter.writeheader()
+    def stop(self):
+        self.stopped = True
+        self.cap.release()
 
+# -----------------------------
+# 프레임 수신 스레드 시작
+# -----------------------------
+url = "http://192.168.4.2:8080/video"
+frame_getter = FrameGetter(url).start()
 
+print("Camera opened:", frame_getter.cap.isOpened())
+
+# -----------------------------
+# 서보 초기값
+# -----------------------------
+sock.sendto("REQ_ANGLE".encode(), (ESP32_IP, ESP32_PORT))
+data, _ = sock.recvfrom(1024)
+th1, th2, th3 = map(int, data.decode().split(','))
+print("Initial angles from ESP32:", th1, th2, th3)
+
+# -----------------------------
+# 메인 루프
+# -----------------------------
 while True:
-    start = time()              # 프레임 계산용 시작 시간 저장
-    ret, frame = cap.read()
-    if not ret:
-        print("Cam Error")
-        break
+    start = time()
 
-    frame = cv2.flip(frame, 1)      # 영상 좌우반전
-    detection = model(frame, verbose=False)[0]     # 얼굴 감지 결과
-    
-    # 가장 가까운 얼굴 선택
+    frame = frame_getter.read()
+    if frame is None:
+        continue
+
+    frame = cv2.flip(frame, 1)
+
+    # YOLO 추론
+    detection = model(frame, verbose=False)[0]
+
     best_face = None
     best_size = -1
+
     for data in detection.boxes.xyxy:
         xmin, ymin, xmax, ymax = map(int, data)
-        box_len = xmax - xmin
-        if box_len > best_size:
-            best_size = box_len
+        sz = xmax - xmin
+        if sz <= 50:
+            continue
+        if sz > best_size:
+            best_size = sz
             best_face = (xmin, ymin, xmax, ymax)
-
+    
     if best_face is None:
-        print("No face detected → using previous angles")
-        message = f"th1:{prev_th1}, th2:{prev_th2}, th3:{prev_th3}, th4:{prev_th4}"
+        cv2.putText(frame, "No Face Detected", (10, 50), cv2.FONT_HERSHEY_SIMPLEX, 0.7, RED, 2)
+
+    else:
+        xmin, ymin, xmax, ymax = best_face
+        xcenter, ycenter = (xmin+xmax)//2, (ymin+ymax)//2
+
+        # 오차 계산
+        del_x = xcenter - 320
+        del_y = 240 - ycenter
+        box_len = xmax - xmin
+        target_size = 140
+        size_error = box_len - target_size
+
+        # 좌우
+        if abs(del_x) < DEADZONE_X: del_x = 0
+        elif abs(del_x) < 30: GAIN_X = 0.01
+        elif abs(del_x) > 200: GAIN_X = 0.005
+        th1 += del_x * GAIN_X
+
+        # 상하
+        if abs(del_y) < DEADZONE_Y: del_y = 0
+        # elif abs(del_y) > 
+        th3 += del_y * GAIN_Y
+        th3 = max(50, min(130, th3))
+
+        # 거리 조절
+        if abs(size_error) < DEADZONE_Z: size_error = 0
+        elif abs(size_error) < 10: GAIN_Z = 0.05
+        th2 -= size_error * GAIN_Z
+        th2 = max(30, min(135, th2))
+
+        # 서보 범위
+        th1 = max(0, min(180, th1))
+        th2 = max(0, min(180, th2))
+        th3 = max(0, min(180, th3))
+
+        # ESP32로 전송
+        message = f"th1:{int(th1)}, th2:{int(th2)}, th3:{int(th3)}"
         sock.sendto(message.encode(), (ESP32_IP, ESP32_PORT))
-        continue
-    
-    xmin, ymin, xmax, ymax = best_face
-    xcenter, ycenter = (xmin+xmax)//2, (ymin+ymax)//2
+        print(message)
 
-    # 화면 표시
-    cv2.rectangle(frame, (xmin, ymin), (xmax, ymax), GREEN, 2)
-    cv2.circle(frame, (xcenter, ycenter), 2, GREEN, 3)
-    cv2.putText(frame, f"({xcenter}, {ycenter})", (xcenter+10, ycenter+10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, GREEN, 2)
-    cv2.putText(frame, f"{box_len}", (xcenter-10, ymax+15), cv2.FONT_HERSHEY_SIMPLEX, 0.5, GREEN, 2)
-    cv2.circle(frame, (320, 240), 2, RED, 3)
-    cv2.putText(frame, f"({320}, {240})", (320+10, 240+10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, RED, 2)
-
-    # Px = 15 - (box_len - 130) / 5
-    # Py = 2 * del_x / 320
-    # Pz = 25  + 5 * del_y / 240
-    # if Pz < 33.5:
-    #     Pz = 25 + 5 * del_y / 240
-    # else:
-    #     Pz = 33.5
-
-    # PID 시간 계산
-    now = time()
-    dt = max(now - dt_prev, 1e-3)
-    dt_prev = now
-
-    # --- 좌표 PID 제어 ---
-    del_x = xcenter - 320
-    del_y = 240 - ycenter
-    del_z = 60 - boxlen_to_distance(box_len)
-    del_x, del_y, del_z = fnc.filter_del(del_x, del_y, del_z, prev_del_x, prev_del_y, prev_del_z)
-
-    err_x = del_z
-    err_y = 0.005 * del_x * Px
-    err_z = 0.005 * del_y * Px
-    # err_x = 0
-    # err_y = 0
-    # err_z = 0
-
-    dx = (err_x - prev_err_x)/dt
-    dy = (err_y - prev_err_y)/dt
-    dz = (err_z - prev_err_z)/dt
-
-    # 좌표 업데이트
-    Px += Kp_x*err_x + Kd_x*dx
-    Py += Kp_y*err_y + Kd_y*dy
-    Pz += Kp_z*err_z + Kd_z*dz
-
-    prev_err_x = err_x
-    prev_err_y = err_y
-    prev_err_z = err_z
-
-    Px, Py, Pz = fnc.limit_workspace(Px, Py, Pz, L2, L3, H)
-    print("Px:", Px, "Py:", Py, "Pz:", Pz)
-    
-    try:
-        th1, th2, th3 = fnc.inverse_kinematics(Px, Py, Pz, L2, L3, H)
-        if th3 >= 125: th3 = 125
-        th4 = 180 - th3        
-
-        # 최대 허용 각속도 반영
-        max_delta_theta = MAX_ANGULAR_VELOCITY * dt
-
-        delta_th1 = th1 - prev_th1
-        delta_th2 = th2 - prev_th2
-        delta_th3 = th3 - prev_th3
-        delta_th4 = th4 - prev_th4
-
-        th1 = int(prev_th1 + np.clip(delta_th1, -max_delta_theta, max_delta_theta))
-        th2 = int(prev_th2 + np.clip(delta_th2, -max_delta_theta, max_delta_theta))
-        th3 = int(prev_th3 + np.clip(delta_th3, -max_delta_theta, max_delta_theta))
-        th4 = int(prev_th4 + np.clip(delta_th4, -max_delta_theta, max_delta_theta))
-
-        # 계산 성공 → 이전 각도 갱신
-        prev_th1, prev_th2, prev_th3, prev_th4 = th1, th2, th3, th4
-
-    except Exception as e:
-        print("IK failed → using previous angles:", e)
-        th1, th2, th3, th4 = prev_th1, prev_th2, prev_th3, prev_th4
-    
-    # th1 = 90
-    # th2 = 90
-    # th3 = 90
-    # th4 = 90
-
-    # ESP32로 좌표 전송
-    message = f"th1:{th1}, th2:{th2}, th3:{th3}, th4:{th4}"
-    sock.sendto(message.encode(), (ESP32_IP, ESP32_PORT))
-    print("Sent:", message)
+        # 화면 표시용
+        cv2.rectangle(frame, (xmin, ymin), (xmax, ymax), GREEN, 2)
+        cv2.circle(frame, (xcenter, ycenter), 2, GREEN, 3)
+        cv2.putText(frame, f"({xcenter}, {ycenter})", (xcenter+10, ycenter+5), cv2.FONT_HERSHEY_SIMPLEX, 0.5, GREEN, 2)
+        cv2.putText(frame, f"{box_len}", (xcenter-10, ymax+15), cv2.FONT_HERSHEY_SIMPLEX, 0.5, GREEN, 2)
+        cv2.circle(frame, (320, 240), 2, RED, 3)
+        cv2.putText(frame, f"({320}, {240})", (320+10, 240+10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, RED, 2)
 
     # FPS 표시
-    end = time()
-    fps = f"FPS: {1/(end-start):.2f}"
-    cv2.putText(frame, fps, (10,20), cv2.FONT_HERSHEY_SIMPLEX, 0.5, RED, 2)
+    fps = f"FPS: {1 / (time() - start):.2f}"
+    cv2.putText(frame, fps, (10,20), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0,0,255), 2)
     cv2.imshow("video", frame)
 
-    # --- CSV 기록 ---
-    csvwriter.writerow({
-        "time": end-start,
-        "err_x": err_x,
-        "err_y": err_y,
-        "err_z": err_z,
-        "Px": Px,
-        "Py": Py,
-        "Pz": Pz,
-        "th1": th1,
-        "th2": th2,
-        "th3": th3,
-    })
-
-    if cv2.waitKey(1) == 27:  # ESC 키 종료
+    if cv2.waitKey(1) & 0xFF == 27:  # ESC
         break
 
-cap.release()
+frame_getter.stop()
 cv2.destroyAllWindows()

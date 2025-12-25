@@ -3,7 +3,7 @@ import numpy as np
 MIN_X_DISTANCE = 5.0    # [cm] 로봇 앞에 물체가 너무 가까이 오지 않도록 최소 거리 설정
 MAX_X_DISTANCE = 25.0   # [cm] 최대 수평 도달 거리
 MAX_Y_RANGE = 15.0      # [cm] Px=20 근처에서 Y가 최대 20cm까지 움직이도록 제한
-MIN_Z_HEIGHT = 10.0     # [cm] 최소 높이 (H=5cm)에 여유분 추가
+MIN_Z_HEIGHT = 5.0     # [cm] 최소 높이 (H=5cm)에 여유분 추가
 MAX_Z_HEIGHT = 33.0     # [cm] 최대 높이 제한
 
 

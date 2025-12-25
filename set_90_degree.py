@@ -15,10 +15,15 @@ while True:
     th1 = 90
     th2 = 90
     th3 = 90
-    th4 = 90
-
-    
-    message = f"th1:{th1}, th2:{th2}, th3:{th3}, th4:{th4}"
-    sock.sendto(message.encode(), (ESP32_IP, ESP32_PORT))
-    print("Sent:", message)
-    time.sleep(0.1)
+    for i in range(50, 130):
+        # th1 = i
+        message = f"th1:{th1}, th2:{th2}, th3:{th3}"
+        sock.sendto(message.encode(), (ESP32_IP, ESP32_PORT))
+        print("Sent:", message)
+        time.sleep(0.03)
+    for i in range(150, 30, -1):
+        # th1 = i
+        message = f"th1:{th1}, th2:{th2}, th3:{th3}"
+        sock.sendto(message.encode(), (ESP32_IP, ESP32_PORT))
+        print("Sent:", message)
+        time.sleep(0.03)
