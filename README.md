@@ -1,4 +1,4 @@
-## Face-Tracking Smartphone Holder
+# Face-Tracking Smartphone Holder
 
 본 프로젝트는 **실시간 영상 스트리밍**, **YOLOv8(face 전용) 얼굴 인식**, **UDP 통신을 통한 ESP32 서보 제어**를 결합한 얼굴 추적 시스템입니다.
 카메라 영상에서 얼굴을 검출하고, 얼굴 위치 및 크기에 따라 3개의 서보 모터(th1, th2, th3)를 실시간으로 제어합니다.
